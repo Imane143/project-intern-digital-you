@@ -107,6 +107,19 @@ const initDatabase = () => {
       FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
       FOREIGN KEY (uploaded_by) REFERENCES users(id)
     )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL,
+      parent_path TEXT DEFAULT '/',
+      created_by INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
+      FOREIGN KEY (created_by) REFERENCES users(id),
+      UNIQUE(workspace_id, path)
+    )`);
   });
 };
 

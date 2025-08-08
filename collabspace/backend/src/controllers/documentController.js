@@ -2,17 +2,15 @@ const { db } = require('../config/database');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { getDocumentPath, initializeStorage } = require('../config/storage');
+
+// Initialize storage on module load
+initializeStorage();
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const workspaceId = req.params.workspaceId;
-    const uploadDir = path.join(__dirname, '../../uploads', workspaceId);
-    
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    
-    cb(null, uploadDir);
+    // Files are stored in memory first, we'll save them manually
+    cb(null, null);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -20,8 +18,11 @@ const storage = multer.diskStorage({
   }
 });
 
+// Use memory storage for better control
+const memoryStorage = multer.memoryStorage();
+
 const upload = multer({ 
-  storage,
+  storage: memoryStorage,
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit
   }
@@ -37,15 +38,27 @@ const uploadFile = (req, res) => {
     [workspaceId, userId],
     (err, member) => {
       if (err || !member) {
-        fs.unlinkSync(req.file.path);
         return res.status(403).json({ error: 'Not a member of this workspace' });
+      }
+
+      // Generate unique filename
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const filename = uniqueSuffix + '-' + req.file.originalname;
+      const filePath = getDocumentPath(workspaceId, filename);
+
+      // Save file to new storage location
+      try {
+        fs.writeFileSync(filePath, req.file.buffer);
+      } catch (error) {
+        console.error('Failed to save file:', error);
+        return res.status(500).json({ error: 'Failed to save file' });
       }
 
       const fileData = {
         workspace_id: workspaceId,
-        name: req.file.filename,
+        name: filename,
         original_name: req.file.originalname,
-        file_path: req.file.path,
+        file_path: filePath,
         file_size: req.file.size,
         mime_type: req.file.mimetype,
         uploaded_by: userId,
@@ -58,7 +71,10 @@ const uploadFile = (req, res) => {
         Object.values(fileData),
         function(err) {
           if (err) {
-            fs.unlinkSync(req.file.path);
+            // Clean up file if database insert fails
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+            }
             return res.status(500).json({ error: 'Failed to save document info' });
           }
 
@@ -215,15 +231,19 @@ const getFolders = (req, res) => {
         return res.status(403).json({ error: 'Not a member of this workspace' });
       }
 
+      // Get folders from both the folders table and documents table
       db.all(
-        'SELECT DISTINCT folder_path FROM documents WHERE workspace_id = ? ORDER BY folder_path',
-        [workspaceId],
+        `SELECT path FROM folders WHERE workspace_id = ?
+         UNION
+         SELECT DISTINCT folder_path as path FROM documents WHERE workspace_id = ?
+         ORDER BY path`,
+        [workspaceId, workspaceId],
         (err, folders) => {
           if (err) {
             return res.status(500).json({ error: 'Failed to fetch folders' });
           }
 
-          const folderStructure = buildFolderTree(folders.map(f => f.folder_path));
+          const folderStructure = buildFolderTree(folders.map(f => f.path));
           res.json(folderStructure);
         }
       );
@@ -257,11 +277,54 @@ const buildFolderTree = (paths) => {
   return tree;
 };
 
+const createFolder = (req, res) => {
+  const { workspaceId } = req.params;
+  const { name, parentPath = '/' } = req.body;
+  const userId = req.userId;
+
+  if (!name || name.trim() === '') {
+    return res.status(400).json({ error: 'Folder name is required' });
+  }
+
+  db.get(
+    'SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
+    [workspaceId, userId],
+    (err, member) => {
+      if (err || !member) {
+        return res.status(403).json({ error: 'Not a member of this workspace' });
+      }
+
+      const folderPath = parentPath === '/' ? `/${name}` : `${parentPath}/${name}`;
+
+      db.run(
+        'INSERT INTO folders (workspace_id, name, path, parent_path, created_by) VALUES (?, ?, ?, ?, ?)',
+        [workspaceId, name, folderPath, parentPath, userId],
+        function(err) {
+          if (err) {
+            if (err.code === 'SQLITE_CONSTRAINT') {
+              return res.status(400).json({ error: 'Folder already exists' });
+            }
+            return res.status(500).json({ error: 'Failed to create folder' });
+          }
+
+          res.status(201).json({
+            id: this.lastID,
+            name,
+            path: folderPath,
+            parent_path: parentPath
+          });
+        }
+      );
+    }
+  );
+};
+
 module.exports = {
   upload,
   uploadFile,
   getDocuments,
   downloadFile,
   deleteFile,
-  getFolders
+  getFolders,
+  createFolder
 };

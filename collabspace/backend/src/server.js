@@ -6,17 +6,28 @@ const path = require('path');
 require('dotenv').config();
 
 const { initDatabase } = require('./config/database');
+const { initializeStorage, cleanupTempFiles } = require('./config/storage');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
     methods: ["GET", "POST"]
   }
 });
 
+// Initialize database and storage
 initDatabase();
+initializeStorage();
+
+// Clean up old temp files on startup
+cleanupTempFiles();
+
+// Schedule periodic cleanup of temp files
+setInterval(() => {
+  cleanupTempFiles();
+}, 6 * 60 * 60 * 1000); // Every 6 hours
 
 app.use(cors());
 app.use(express.json());

@@ -7,7 +7,8 @@ const {
   getDocuments,
   downloadFile,
   deleteFile,
-  getFolders
+  getFolders,
+  createFolder
 } = require('../controllers/documentController');
 
 const router = express.Router();
@@ -54,6 +55,14 @@ router.get('/workspaces/:workspaceId/folders',
   param('workspaceId').isInt(),
   validateRequest,
   getFolders
+);
+
+router.post('/workspaces/:workspaceId/folders',
+  param('workspaceId').isInt(),
+  body('name').notEmpty().trim(),
+  body('parentPath').optional(),
+  validateRequest,
+  createFolder
 );
 
 module.exports = router;

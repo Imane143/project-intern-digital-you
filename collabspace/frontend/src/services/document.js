@@ -36,5 +36,13 @@ export const documentService = {
   getFolders: async (workspaceId) => {
     const response = await api.get(`/documents/workspaces/${workspaceId}/folders`);
     return response.data;
+  },
+
+  createFolder: async (workspaceId, name, parentPath = '/') => {
+    const response = await api.post(`/documents/workspaces/${workspaceId}/folders`, {
+      name,
+      parentPath
+    });
+    return response.data;
   }
 };

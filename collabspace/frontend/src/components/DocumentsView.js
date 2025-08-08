@@ -255,7 +255,18 @@ function DocumentsView({ workspaceId }) {
   const fileInputRef = useRef(null);
   const currentUser = authService.getCurrentUser();
 
-  // Load folders from localStorage on mount and workspace change
+  // Helper function to extract folder paths from tree structure
+  const extractFoldersFromTree = (tree, paths = []) => {
+    if (tree.path) {
+      paths.push(tree.path);
+    }
+    if (tree.children) {
+      tree.children.forEach(child => extractFoldersFromTree(child, paths));
+    }
+    return paths;
+  };
+
+  // Load folders from API on mount and workspace change
   useEffect(() => {
     console.log('DocumentsView component mounted/workspaceId changed:', workspaceId, 'hasInitialized:', hasInitialized.current);
     
@@ -267,75 +278,36 @@ function DocumentsView({ workspaceId }) {
     // Reset initialization flag when workspace changes
     hasInitialized.current = false;
     
-    // Load saved folders from localStorage first
-    const storageKey = `folders-${workspaceId}`;
-    const savedFolders = localStorage.getItem(storageKey);
-    
-    console.log('Checking localStorage for key:', storageKey);
-    console.log('Found in localStorage:', savedFolders);
-    console.log('Raw localStorage contents for all keys:', Object.keys(localStorage).filter(k => k.startsWith('folders-')));
-    
-    let foldersToLoad = ['/'];
-    
-    if (savedFolders) {
+    // Load folders from API
+    const loadFolders = async () => {
       try {
-        const parsedFolders = JSON.parse(savedFolders);
-        console.log('Loading saved folders:', parsedFolders);
-        if (parsedFolders && parsedFolders.length > 0) {
-          console.log('Setting folders to saved folders:', parsedFolders);
-          foldersToLoad = parsedFolders;
-        } else {
-          console.log('Parsed folders was empty, using default');
-          foldersToLoad = ['/'];
-        }
+        const folderTree = await documentService.getFolders(workspaceId);
+        const extractedFolders = extractFoldersFromTree(folderTree);
+        
+        console.log('Loaded folders from API:', extractedFolders);
+        setFolders(extractedFolders.length > 0 ? extractedFolders : ['/']);
+        hasInitialized.current = true;
+        
+        // Fetch documents with the loaded folders
+        fetchAllDocuments(extractedFolders.length > 0 ? extractedFolders : ['/']);
       } catch (error) {
-        console.error('Failed to parse saved folders:', error);
-        foldersToLoad = ['/'];
+        console.error('Failed to load folders:', error);
+        // Fallback to root folder
+        setFolders(['/']);
+        hasInitialized.current = true;
+        fetchAllDocuments(['/']);
       }
-    } else {
-      console.log('No saved folders found, using default ["/"]');
-      foldersToLoad = ['/'];
-    }
+    };
     
-    console.log('About to set folders to:', foldersToLoad);
-    setFolders(foldersToLoad);
-    hasInitialized.current = true;
+    loadFolders();
     
     // Fetch workspace members to get current user's workspace role
     fetchWorkspaceMembers();
     
-    // Fetch documents with the loaded folders immediately
-    setTimeout(() => {
-      console.log('Calling fetchAllDocuments with loaded folders:', foldersToLoad);
-      fetchAllDocuments(foldersToLoad);
-    }, 100);
-    
   }, [workspaceId])
 
 
-  // Save folders to localStorage whenever folders change (but only after initialization)
-  useEffect(() => {
-    console.log('Save effect triggered - folders changed:', folders, 'workspaceId:', workspaceId, 'hasInitialized:', hasInitialized.current);
-    
-    if (folders.length > 0 && workspaceId && hasInitialized.current) {
-      const storageKey = `folders-${workspaceId}`;
-      console.log('Saving folders to localStorage with key:', storageKey);
-      console.log('Folders being saved:', folders);
-      localStorage.setItem(storageKey, JSON.stringify(folders));
-      
-      // Verify it was saved
-      const verification = localStorage.getItem(storageKey);
-      console.log('Verification - saved successfully:', verification);
-      console.log('Full localStorage dump:', Object.keys(localStorage).reduce((acc, key) => {
-        if (key.startsWith('folders-')) {
-          acc[key] = localStorage.getItem(key);
-        }
-        return acc;
-      }, {}));
-    } else {
-      console.log('Skipping save - folders empty, no workspaceId, or not initialized yet');
-    }
-  }, [folders, workspaceId]);
+  // No longer need to save folders to localStorage since they're in the database
 
   const fetchAllDocuments = useCallback(async (foldersToUse = null) => {
     try {
@@ -746,23 +718,25 @@ function DocumentsView({ workspaceId }) {
                 Cancel
               </button>
               <button 
-                onClick={() => {
+                onClick={async () => {
                   if (newFolderName.trim()) {
-                    const newPath = `/${newFolderName}`;
-                    console.log('Creating new folder:', newPath);
-                    setFolders(prev => {
-                      console.log('Previous folders before adding:', prev);
-                      if (!prev.includes(newPath)) {
-                        const newFolders = [...prev, newPath].sort();
-                        console.log('New folders after adding:', newFolders);
-                        return newFolders;
-                      }
-                      console.log('Folder already exists, returning previous:', prev);
-                      return prev;
-                    });
-                    setShowCreateFolderModal(false);
-                    setNewFolderName('');
-                    console.log('Folder creation completed for:', newPath);
+                    try {
+                      await documentService.createFolder(workspaceId, newFolderName);
+                      
+                      // Fetch the updated folder list from the server
+                      const folderTree = await documentService.getFolders(workspaceId);
+                      const extractedFolders = extractFoldersFromTree(folderTree);
+                      setFolders(extractedFolders);
+                      
+                      setShowCreateFolderModal(false);
+                      setNewFolderName('');
+                      
+                      // Refresh documents to include the new folder
+                      fetchAllDocuments(extractedFolders);
+                    } catch (error) {
+                      console.error('Failed to create folder:', error);
+                      alert('Failed to create folder: ' + (error.response?.data?.error || error.message));
+                    }
                   }
                 }}
                 style={{
